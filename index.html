@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Demo visite (solo HTML, 48h retention)</title>
+  <style>
+    :root { --bg:#0b0c10; --card:#121318; --muted:#9aa3af; --fg:#e5e7eb; --accent:#60a5fa; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+    html,body { margin:0; padding:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 24px; margin: 0 0 12px; }
+    p.sub { color: var(--muted); margin-top: 0; }
+    .card { background: var(--card); border: 1px solid #1f2430; border-radius: 14px; padding: 16px; margin: 16px 0; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; }
+    .kv { background:#0f1117; border:1px solid #1f2430; border-radius:10px; padding:10px 12px; flex:1 1 240px; min-width:220px; }
+    .k { color: var(--muted); font-size: 12px; letter-spacing: .02em; }
+    .v { font-weight: 600; margin-top:4px; word-break: break-word; }
+    button { background:#0f172a; color:var(--fg); border:1px solid #2b3446; padding:8px 12px; border-radius:10px; cursor:pointer; }
+    button:hover { border-color:#3a465f; }
+    .btn-accent { background:#0b1220; border-color:#274060; color:#e6f0ff; }
+    table { width:100%; border-collapse: collapse; margin-top:8px; }
+    th, td { border-bottom: 1px solid #1f2430; padding: 10px 8px; text-align: left; vertical-align: top; font-size: 14px; }
+    th { color: #cbd5e1; font-weight: 600; position: sticky; top: 0; background: #121318; }
+    .muted { color: var(--muted); }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid #283044; background:#0f1117; }
+    .footer { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Rilevamento dispositivo (solo HTML)</h1>
+    <p class="sub">Dati tecnici raccolti in locale. Le visite vengono conservate per <strong>48 ore</strong> e poi rimosse automaticamente.</p>
+
+    <div class="card">
+      <div class="row" id="liveInfo"></div>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button id="forceLog" class="btn-accent">Registra ora questa visita</button>
+        <button id="refresh">Aggiorna lista</button>
+        <button id="purge">Pulisci voci >48h</button>
+        <button id="clearAll" style="border-color:#5b2630; color:#fecaca;">Cancella tutto</button>
+      </div>
+      <div class="footer">L’ID anonimo resta nel browser per associare le visite dello stesso dispositivo.</div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:8px; justify-content: space-between;">
+        <h2 style="margin:0;">Lista visite (locale a questo browser)</h2>
+        <span id="count" class="pill">0 elementi</span>
+      </div>
+      <div style="overflow:auto; max-height: 420px; margin-top:8px;">
+        <table id="visitsTable" aria-label="Visite registrate">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Orario (ISO)</th>
+              <th>ID Anonimo</th>
+              <th>Tipo</th>
+              <th>Modello</th>
+              <th>OS</th>
+              <th>Browser</th>
+              <th>Schermo</th>
+              <th>Lingua</th>
+              <th>Timezone</th>
+              <th>CPU</th>
+              <th>RAM</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="footer">Per un tracciamento multi-utente serve un backend: qui i dati non lasciano mai il tuo dispositivo.</div>
+    </div>
+  </div>
+
+<script>
+/* =========================
+   Utility di storage locale
+   ========================= */
+const DB_KEY = 'visits_v1';
+const ID_KEY = 'anon_id_v1';
+const RETENTION_MS = 48 * 60 * 60 * 1000; // 48 ore
+const DUP_WINDOW_MS = 10 * 1000; // 10 secondi
+
+function getNow() { return Date.now(); }
+
+function getList() {
+  try { return JSON.parse(localStorage.getItem(DB_KEY) || '[]'); }
+  catch { return []; }
+}
+
+function saveList(arr) {
+  localStorage.setItem(DB_KEY, JSON.stringify(arr));
+}
+
+function getAnonId() {
+  let id = localStorage.getItem(ID_KEY);
+  if (!id) {
+    id = 'v_' + Math.random().toString(36).slice(2,10);
+    localStorage.setItem(ID_KEY, id);
+  }
+  return id;
+}
+
+function pruneOld() {
+  const cutoff = getNow() - RETENTION_MS;
+  const next = getList().filter(x => x.ts >= cutoff);
+  saveList(next);
+  return next.length;
+}
+
+/* =========================
+   Rilevazione dispositivo
+   ========================= */
+function detectInfo() {
+  const ua = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  const lang = navigator.language || (navigator.languages && navigator.languages[0]) || '';
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  const screenRes = (window.screen ? (window.screen.width + 'x' + window.screen.height) : 'unknown');
+
+  // Tipo (molto semplice)
+  const isIPhone = /iPhone/i.test(ua);
+  const isIPad   = /iPad/i.test(ua) || (/Macintosh/.test(ua) && 'ontouchstart' in window);
+  const isAndroid = /Android/i.test(ua);
+  const isMobile = /Mobi|Mobile|Phone/i.test(ua) || isIPhone || isAndroid;
+  const deviceType = isIPhone ? 'iPhone' : isIPad ? 'iPad' : isAndroid ? 'Android' : (isMobile ? 'Mobile' : 'Desktop');
+
+  // OS
+  let os = 'Sconosciuto';
+  if (/Windows NT/i.test(ua)) os = 'Windows';
+  else if (/Mac OS X/i.test(ua) || /Macintosh/i.test(ua)) os = 'macOS/iOS';
+  else if (/Android/i.test(ua)) os = 'Android';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+  if (/CPU iPhone OS (\d+_\d+)/i.test(ua)) os = 'iOS ' + RegExp.$1.replace('_','.');
+  if (/Android (\d+(\.\d+)?)/i.test(ua)) os = 'Android ' + RegExp.$1;
+
+  // Browser
+  let browser = 'Sconosciuto';
+  if (/Edg\//.test(ua)) browser = 'Edge';
+  else if (/OPR\//.test(ua)) browser = 'Opera';
+  else if (/Chrome\//.test(ua) && !/Chromium/.test(ua)) browser = 'Chrome';
+  else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) browser = 'Safari';
+  else if (/Firefox\//.test(ua)) browser = 'Firefox';
+
+  // Modello (se lo UA lo rivela – sugli iPhone moderni spesso NO)
+  // Proviamo alcuni pattern comuni per Android: "MODEL Build/"
+  let model = '';
+  const m1 = ua.match(/;\s*([A-Za-z0-9\-_\s]+?)\s+Build\//); // Android
+  if (m1 && m1[1]) model = m1[1].trim();
+  // A volte Samsung/Pixel compaiono come "SM-XXXX" o "Pixel 7"
+  const m2 = ua.match(/;\s*(SM-[A-Za-z0-9]+|Pixel\s?[A-Za-z0-9\s]*)\s*;/);
+  if (!model && m2 && m2[1]) model = m2[1].trim();
+  // iPad può apparire come "iPad"
+  if (!model && isIPad) model = 'iPad';
+  if (!model && isIPhone) model = 'iPhone'; // generico, Apple non espone il modello preciso
+  if (!model && isAndroid) model = 'Android device';
+
+  // Risorse hardware (se disponibili)
+  const cores = navigator.hardwareConcurrency || null;
+  const deviceMemory = (navigator.deviceMemory ? (navigator.deviceMemory + ' GB') : 'unknown');
+
+  return {
+    anon_id: getAnonId(),
+    ts
